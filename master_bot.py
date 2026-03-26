@@ -3,7 +3,8 @@ import json
 import logging
 import random
 
-from telegram import Update
+from telegram import Bot, ReactionTypeEmoji, Update
+from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -20,9 +21,13 @@ logger = logging.getLogger(__name__)
 class MasterBot:
     """
     The master bot controls all 7 worker bots.
-    - Listens for every new channel post
-    - Dispatches all 7 workers to react with staggered delays
-    - Exposes commands for the owner to manage the reaction pool
+
+    Emoji assignment per post:
+      emoji[0] -> workers 1,2,3,4  (x4 reactions)
+      emoji[1] -> workers 5,6      (x2 reactions)
+      emoji[2] -> worker 7 + master bot (x2 reactions)
+
+    All 8 reactions are spread over 2-3 minutes with random delays.
     """
 
     def __init__(self, config_path: str = "config.json"):
@@ -30,11 +35,18 @@ class MasterBot:
         self.config = self._load_config()
         self.workers: list[WorkerBot] = self._init_workers()
 
-    # ── Config helpers ─────────────────────────────────────────────────────────
-
     def _load_config(self) -> dict:
+        import os
         with open(self.config_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            config = json.load(f)
+        if os.getenv("MASTER_TOKEN"):
+            config["master_token"] = os.getenv("MASTER_TOKEN")
+            config["worker_tokens"] = [
+                os.getenv(f"WORKER_{i}") for i in range(1, 8)
+            ]
+            config["channel_id"] = os.getenv("CHANNEL_ID", config["channel_id"])
+            config["owner_id"] = int(os.getenv("OWNER_ID", config["owner_id"]))
+        return config
 
     def _save_config(self):
         with open(self.config_path, "w", encoding="utf-8") as f:
@@ -50,7 +62,6 @@ class MasterBot:
         return user_id == self.config["owner_id"]
 
     def _is_target_channel(self, chat) -> bool:
-        """Check if the post came from the configured channel."""
         cfg = str(self.config["channel_id"])
         return str(chat.id) == cfg or (
             hasattr(chat, "username")
@@ -58,73 +69,97 @@ class MasterBot:
             and f"@{chat.username}" == cfg
         )
 
-    # ── Core dispatch ──────────────────────────────────────────────────────────
-
     async def _dispatch_reactions(self, chat_id, message_id: int):
         """
-        Fire all 7 workers concurrently with random staggered delays
-        so reactions appear naturally over a few seconds.
+        Fixed emoji assignments:
+          emoji[0] -> workers 0,1,2,3  (x4)
+          emoji[1] -> workers 4,5      (x2)
+          emoji[2] -> worker 6 + master bot (x2)
+        All fire at random delays between 5 and 180 seconds.
         """
         reactions = self.config["reactions"]
-        if not reactions:
-            logger.warning("Reaction pool is empty — skipping.")
+        if len(reactions) < 3:
+            logger.warning("Need at least 3 reactions configured -- skipping.")
             return
+
+        emoji1, emoji2, emoji3 = reactions[0], reactions[1], reactions[2]
+
+        worker_emoji = [
+            emoji1, emoji1, emoji1, emoji1,
+            emoji2, emoji2,
+            emoji3,
+        ]
+
+        delays = sorted(random.uniform(5, 180) for _ in range(8))
 
         tasks = [
             worker.react(
                 chat_id=chat_id,
                 message_id=message_id,
-                reaction_pool=reactions,
-                delay=i * random.uniform(1.0, 3.0),   # 1–3 s apart per worker
+                reaction_pool=[worker_emoji[i]],
+                delay=delays[i],
             )
             for i, worker in enumerate(self.workers)
         ]
+
+        tasks.append(
+            self._master_react(chat_id, message_id, emoji3, delay=delays[7])
+        )
+
         await asyncio.gather(*tasks)
 
-    # ── Channel post handler ───────────────────────────────────────────────────
+    async def _master_react(self, chat_id, message_id: int, emoji: str, delay: float):
+        await asyncio.sleep(delay)
+        try:
+            bot = Bot(token=self.config["master_token"])
+            await bot.set_message_reaction(
+                chat_id=chat_id,
+                message_id=message_id,
+                reaction=[ReactionTypeEmoji(emoji=emoji)],
+            )
+            logger.info(f"[Master] Reacted with {emoji} to message {message_id}")
+        except TelegramError as e:
+            logger.error(f"[Master] Failed to react: {e}")
 
     async def handle_channel_post(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         post = update.channel_post
         if post and self._is_target_channel(post.chat):
-            logger.info(f"New post detected (id={post.message_id}). Dispatching workers…")
-            # Run in background so the handler returns immediately
+            logger.info(f"New post detected (id={post.message_id}). Dispatching workers...")
             asyncio.create_task(
                 self._dispatch_reactions(post.chat.id, post.message_id)
             )
-
-    # ── Commands ───────────────────────────────────────────────────────────────
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_owner(update.effective_user.id):
             return
         await update.message.reply_text(
-            "👋 *Reaction Master Bot*\n\n"
-            "I control 7 worker bots that react to every new post in your channel.\n\n"
-            "*Commands:*\n"
-            "`/setreactions 👍 🔥 ❤️` — Set the reaction pool\n"
-            "`/listreactions` — View current pool\n"
-            "`/status` — Check all 7 worker bots\n",
-            parse_mode="Markdown",
+            "Reaction Master Bot\n\n"
+            "8 total reactions per post:\n"
+            "Emoji 1 x4 | Emoji 2 x2 | Emoji 3 x2\n"
+            "All spread over 2-3 minutes randomly.\n\n"
+            "Commands:\n"
+            "/setreactions emoji1 emoji2 emoji3\n"
+            "/listreactions\n"
+            "/status"
         )
 
     async def cmd_set_reactions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_owner(update.effective_user.id):
             return
 
-        if not context.args:
+        if not context.args or len(context.args) < 3:
             await update.message.reply_text(
-                "Usage: `/setreactions 👍 🔥 ❤️ 😂`\n"
-                "Send the emojis separated by spaces.",
-                parse_mode="Markdown",
+                "Send exactly 3 emojis:\n/setreactions emoji1 emoji2 emoji3\n\n"
+                "Emoji 1 = x4 | Emoji 2 = x2 | Emoji 3 = x2"
             )
             return
 
         self.config["reactions"] = list(context.args)
         self._save_config()
 
-        pool = " ".join(self.config["reactions"])
+        e1, e2, e3 = self.config["reactions"][0], self.config["reactions"][1], self.config["reactions"][2]
         await update.message.reply_text(
-            f"✅ Reaction pool updated ({len(self.config['reactions'])} emojis):\n{pool}"
+            f"Updated!\n\n{e1} x4\n{e2} x2\n{e3} x2"
         )
 
     async def cmd_list_reactions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -132,32 +167,29 @@ class MasterBot:
             return
 
         reactions = self.config["reactions"]
-        if not reactions:
-            await update.message.reply_text("⚠️ Reaction pool is empty. Use /setreactions to add some.")
+        if len(reactions) < 3:
+            await update.message.reply_text("Need at least 3 reactions. Use /setreactions.")
             return
 
-        pool = " ".join(reactions)
+        e1, e2, e3 = reactions[0], reactions[1], reactions[2]
         await update.message.reply_text(
-            f"*Current reaction pool* ({len(reactions)} emojis):\n{pool}",
-            parse_mode="Markdown",
+            f"Current setup:\n\n{e1} x4 (workers 1-4)\n{e2} x2 (workers 5-6)\n{e3} x2 (worker 7 + master)\n\nAll random within 2-3 minutes."
         )
 
     async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_owner(update.effective_user.id):
             return
 
-        await update.message.reply_text("🔍 Checking all worker bots…")
+        await update.message.reply_text("Checking all worker bots...")
         statuses = await asyncio.gather(*[w.get_status() for w in self.workers])
 
         lines = []
         for s in statuses:
-            icon = "✅" if s["active"] else "❌"
+            icon = "OK" if s["active"] else "FAIL"
             name = f"@{s['username']}" if s["active"] else f"Error: {s.get('error', 'Unknown')}"
-            lines.append(f"{icon} Worker {s['worker_id']}: {name}")
+            lines.append(f"[{icon}] Worker {s['worker_id']}: {name}")
 
         await update.message.reply_text("\n".join(lines))
-
-    # ── Entry point ────────────────────────────────────────────────────────────
 
     def run(self):
         app = (
@@ -166,16 +198,14 @@ class MasterBot:
             .build()
         )
 
-        # Owner commands
         app.add_handler(CommandHandler("start", self.cmd_start))
         app.add_handler(CommandHandler("setreactions", self.cmd_set_reactions))
         app.add_handler(CommandHandler("listreactions", self.cmd_list_reactions))
         app.add_handler(CommandHandler("status", self.cmd_status))
 
-        # Channel post listener
         app.add_handler(
             MessageHandler(filters.UpdateType.CHANNEL_POSTS, self.handle_channel_post)
         )
 
-        logger.info("Master bot is running and listening for channel posts…")
+        logger.info("Master bot is running and listening for channel posts...")
         app.run_polling(allowed_updates=["message", "channel_post"])
