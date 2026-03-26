@@ -4,7 +4,7 @@ import logging
 import random
 
 from telegram import Bot, ReactionTypeEmoji, Update
-from telegram.error import TelegramError
+from telegram.error import TelegramError, Conflict
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -195,6 +195,15 @@ class MasterBot:
 
         await update.message.reply_text("\n".join(lines))
 
+    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE):
+        if isinstance(context.error, Conflict):
+            logger.critical(
+                "Conflict error: another bot instance is already running. "
+                "Shut down duplicate instances on Railway."
+            )
+        else:
+            logger.error(f"Unhandled error: {context.error}", exc_info=context.error)
+
     def run(self):
         app = (
             Application.builder()
@@ -211,5 +220,10 @@ class MasterBot:
             MessageHandler(filters.UpdateType.CHANNEL_POSTS, self.handle_channel_post)
         )
 
+        app.add_error_handler(self.error_handler)
+
         logger.info("Master bot is running and listening for channel posts...")
-        app.run_polling(allowed_updates=["message", "channel_post"])
+        app.run_polling(
+            allowed_updates=["message", "channel_post"],
+            drop_pending_updates=True,   # clears old queued updates on start
+        )
