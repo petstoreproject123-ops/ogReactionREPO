@@ -90,7 +90,11 @@ class MasterBot:
             emoji3,
         ]
 
-        delays = sorted(random.uniform(5, 180) for _ in range(8))
+        delays = []
+        t = 300  # first reaction after 5 minutes
+        for _ in range(8):
+            delays.append(t)
+            t += random.uniform(180, 240)  # each next reaction 3–4 minutes later
 
         tasks = [
             worker.react(
