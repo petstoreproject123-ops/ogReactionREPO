@@ -1,0 +1,15 @@
+{
+  "master_token": "8363573696:AAGXpD4T4OuNu93Z98OrTL8G3z6KM-vDsxY",
+  "worker_tokens": [
+    "8578327028:AAHdKRpxMXstzhNssPWEhkkDN9Ikdl4GPxM",  
+    "8208309317:AAECJbrof5vzmhhA6OAV5y6qPFelNDRG-CA", 
+    "8533257258:AAGfs9YqHEKcpi_IudzO9R7y8d_xWUlGlvM",  
+    "8323392358:AAH371x6ZqiN9ZTjFPNxyisJbrc9nBped7E",  
+    "8565508773:AAEHfm-wrKmxh7b9Cc88KsQFBClZNnX4NX4",
+    "8095952099:AAH_kZ0yXbGoDGRcUTwH73XNJFb8ZapqOkA",
+    "8325442220:AAFd2NRCGTvZoPYFDKK9mYMZX-rjgaMAS1Y",
+  ],
+  "channel_id": "@yourchannel",
+  "owner_id": 123456789,
+  "reactions": ["👍", "🔥", "❤️", "😂", "🎉", "👏", "💯", "🤣", "😭", "🙏"]
+}
