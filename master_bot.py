@@ -22,12 +22,9 @@ class MasterBot:
     """
     The master bot controls all 7 worker bots.
 
-    Emoji assignment per post:
-      emoji[0] -> workers 1,2,3,4  (x4 reactions)
-      emoji[1] -> workers 5,6      (x2 reactions)
-      emoji[2] -> worker 7 + master bot (x2 reactions)
-
-    All 8 reactions are spread over 2-3 minutes with random delays.
+    Reactions per post = exactly 8 slots (7 workers + 1 master).
+    Emoji distribution is fully customizable via /setreactions.
+    All 8 reactions are spread over ~25 minutes with random delays.
     """
 
     def __init__(self, config_path: str = "config.json"):
@@ -69,45 +66,41 @@ class MasterBot:
             and f"@{chat.username}" == cfg
         )
 
+    def _slots_summary(self, slots: list) -> str:
+        summary = {}
+        for e in slots:
+            summary[e] = summary.get(e, 0) + 1
+        return "\n".join(f"{e} x{c}" for e, c in summary.items())
+
     async def _dispatch_reactions(self, chat_id, message_id: int):
         """
-        Fixed emoji assignments:
-          emoji[0] -> workers 0,1,2,3  (x4)
-          emoji[1] -> workers 4,5      (x2)
-          emoji[2] -> worker 6 + master bot (x2)
-        All fire at random delays between 5 and 180 seconds.
+        Reads 8 emoji slots from config and assigns one per worker + master.
+        Delays are staggered randomly, starting at 5 minutes, each next
+        reaction 3-4 minutes later.
         """
-        reactions = self.config["reactions"]
-        if len(reactions) < 3:
-            logger.warning("Need at least 3 reactions configured -- skipping.")
+        slots = self.config.get("reactions", [])
+        if len(slots) != 8:
+            logger.warning("Need exactly 8 reaction slots configured -- skipping.")
             return
-
-        emoji1, emoji2, emoji3 = reactions[0], reactions[1], reactions[2]
-
-        worker_emoji = [
-            emoji1, emoji1, emoji1, emoji1,
-            emoji2, emoji2,
-            emoji3,
-        ]
 
         delays = []
         t = 300  # first reaction after 5 minutes
         for _ in range(8):
             delays.append(t)
-            t += random.uniform(180, 240)  # each next reaction 3–4 minutes later
+            t += random.uniform(180, 240)
 
         tasks = [
             worker.react(
                 chat_id=chat_id,
                 message_id=message_id,
-                reaction_pool=[worker_emoji[i]],
+                reaction_pool=[slots[i]],
                 delay=delays[i],
             )
             for i, worker in enumerate(self.workers)
         ]
 
         tasks.append(
-            self._master_react(chat_id, message_id, emoji3, delay=delays[7])
+            self._master_react(chat_id, message_id, slots[7], delay=delays[7])
         )
 
         await asyncio.gather(*tasks)
@@ -138,11 +131,13 @@ class MasterBot:
             return
         await update.message.reply_text(
             "Reaction Master Bot\n\n"
-            "8 total reactions per post:\n"
-            "Emoji 1 x4 | Emoji 2 x2 | Emoji 3 x2\n"
-            "All spread over 2-3 minutes randomly.\n\n"
+            "8 total reactions per post, spread over ~25 minutes.\n\n"
             "Commands:\n"
-            "/setreactions emoji1 emoji2 emoji3\n"
+            "/setreactions emoji count [emoji count ...]\n"
+            "  e.g. /setreactions ❤️ 4 😭 2 🙏 2\n"
+            "  e.g. /setreactions ❤️ 8\n"
+            "  e.g. /setreactions ❤️ 5 😭 2 🔥 1\n"
+            "  Total must always equal 8.\n\n"
             "/listreactions\n"
             "/status"
         )
@@ -151,33 +146,60 @@ class MasterBot:
         if not self._is_owner(update.effective_user.id):
             return
 
-        if not context.args or len(context.args) < 3:
+        args = context.args or []
+        if len(args) < 2 or len(args) % 2 != 0:
             await update.message.reply_text(
-                "Send exactly 3 emojis:\n/setreactions emoji1 emoji2 emoji3\n\n"
-                "Emoji 1 = x4 | Emoji 2 = x2 | Emoji 3 = x2"
+                "Usage: /setreactions emoji count [emoji count ...]\n\n"
+                "Examples:\n"
+                "  /setreactions ❤️ 4 😭 2 🙏 2\n"
+                "  /setreactions ❤️ 8\n"
+                "  /setreactions ❤️ 5 😭 2 🔥 1\n\n"
+                "Total reactions must equal 8."
             )
             return
 
-        self.config["reactions"] = list(context.args)
+        slots = []
+        try:
+            for i in range(0, len(args), 2):
+                emoji = args[i]
+                count = int(args[i + 1])
+                if count < 1:
+                    raise ValueError("Count must be at least 1.")
+                slots.extend([emoji] * count)
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                "Each emoji must be followed by a positive whole number.\n"
+                "Example: /setreactions ❤️ 4 😭 2 🙏 2"
+            )
+            return
+
+        if len(slots) != 8:
+            await update.message.reply_text(
+                f"Total must be exactly 8 reactions (got {len(slots)}).\n"
+                "Example: /setreactions ❤️ 4 😭 2 🙏 2"
+            )
+            return
+
+        self.config["reactions"] = slots
         self._save_config()
 
-        e1, e2, e3 = self.config["reactions"][0], self.config["reactions"][1], self.config["reactions"][2]
         await update.message.reply_text(
-            f"Updated!\n\n{e1} x4\n{e2} x2\n{e3} x2"
+            f"Updated!\n\n{self._slots_summary(slots)}"
         )
 
     async def cmd_list_reactions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_owner(update.effective_user.id):
             return
 
-        reactions = self.config["reactions"]
-        if len(reactions) < 3:
-            await update.message.reply_text("Need at least 3 reactions. Use /setreactions.")
+        slots = self.config.get("reactions", [])
+        if len(slots) != 8:
+            await update.message.reply_text(
+                "Reactions not configured yet. Use /setreactions."
+            )
             return
 
-        e1, e2, e3 = reactions[0], reactions[1], reactions[2]
         await update.message.reply_text(
-            f"Current setup:\n\n{e1} x4 (workers 1-4)\n{e2} x2 (workers 5-6)\n{e3} x2 (worker 7 + master)\n\nAll random within 2-3 minutes."
+            f"Current setup (8 total):\n\n{self._slots_summary(slots)}"
         )
 
     async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -225,5 +247,5 @@ class MasterBot:
         logger.info("Master bot is running and listening for channel posts...")
         app.run_polling(
             allowed_updates=["message", "channel_post"],
-            drop_pending_updates=True,   # clears old queued updates on start
+            drop_pending_updates=True,
         )
