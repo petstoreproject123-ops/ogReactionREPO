@@ -1,15 +1,9 @@
 {
-  "master_token": "8688768950:AAFmoXUCm1Qx_TWMKgIWDwPuURDN3aOlia8",
+  "master_token": "gg:AAFmoXUCm1Qx_TWMKgIWDwPuURDN3aOlia8",
   "worker_tokens": [
-    "8979851564:AAGuKikVmBi5uFbdPqskChNS9pP-5qDhJeU",  
-    "8685126757:AAG_71bmdpJo6-dMkMYtY-quvhKGwvGtJFA", 
-    "8912105330:AAEp91HiKfiuve2LBqCzkykgyIR0zERRaw4",  
-    "8587408692:AAGLes5QIVy0sEBNv0sgX5bsYzRgMlNMlOs",  
-    "8887971560:AAG2ZsQ5is8sX0euQbpK_QXDT7Hh-1NGUtM",
-    "8894266803:AAH8iazNH08AU3wGN9nsaJpu5JRmDlOdtUY",
-    "8897811933:AAEmyGy2Zsn16QdyXDuVTIjGhYkLsnaUAo8"
+  EW
   ],
-  "channel_id": "-1002013620572",
-  "owner_id":  7124736426,
+  "channel_id": "-gg",
+  "owner_id":  gg,
   "reactions": ["👍", "🔥", "❤️", "😂", "🎉", "👏", "💯", "🤣", "😭", "🙏"]
 }
